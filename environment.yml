@@ -1,0 +1,37 @@
+name: base
+channels:
+  - pyg
+  - defaults
+dependencies:
+  - _anaconda_depends
+  - python=3.11
+  - setuptools
+  - wheel
+  - anaconda-anon-usage
+  - anaconda-catalogs
+  - anaconda-client
+  - anaconda-project
+  - anaconda-navigator
+  - conda
+  - conda-build
+  - conda-content-trust
+  - conda-libmamba-solver
+  - conda-pack
+  - conda-package-handling
+  - conda-package-streaming
+  - conda-token
+  - conda-verify
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchaudio
+  - torchvision
+  - libstdcxx-ng
+  - dask[version='>=2024.5.0']
+  - pandas[version='>=2.2']
+  - pyarrow
+  - cudatoolkit[version='>=11.8']
+  - cmake
+  - mamba
+  - nodejs
+  - lightgbm
+prefix: /home/diego/anaconda3
