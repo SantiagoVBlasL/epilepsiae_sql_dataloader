@@ -1,50 +1,33 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-
-
-ENGINE_STR = "postgresql+psycopg2://postgres:postgres@localhost/seizure_db"
-
-
-def get_session(engine_str=ENGINE_STR):
-    """
-    Create a session to the database.
-    """
-    # Create an engine that stores data in the local directory's
-    # on the server we could easily stuff this on /mnt/wines if we wanted to
-    engine = create_engine(engine_str)
-    declarative_base().metadata.create_all(engine)
-
-    # Create all tables in the engine. This is equivalent to "Create Table"
-    # statements in raw SQL.
-    declarative_base().metadata.bind = engine
-
-    # Create a configured "Session" class
-    db_session = sessionmaker(bind=engine)
-
-    # Create a Session
-    session = db_session()
-
-    return session
-
-
+import os
 from contextlib import contextmanager
 from sqlalchemy.orm import sessionmaker
 
+DEFAULT_PGURL = "postgresql://epilepsiae:epilepsiae@localhost:5432/epilepsiae"
 
-ENGINE_STR = "postgresql+psycopg2://postgres:postgres@localhost/seizure_db"
+def _normalize_pgurl(pgurl: str) -> str:
+    # SQLAlchemy acepta postgresql:// pero en algunos setups preferimos explicitar driver
+    if pgurl.startswith("postgresql+"):
+        return pgurl
+    if pgurl.startswith("postgresql://"):
+        return pgurl.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return pgurl  # fallback
 
+PGURL = os.environ.get("PGURL") or os.environ.get("DATABASE_URL") or DEFAULT_PGURL
+ENGINE_STR = _normalize_pgurl(PGURL)
 
 @contextmanager
-def session_scope(engine_str):
+def session_scope(engine_str: str = ENGINE_STR):
     """Provide a transactional scope around a series of operations."""
+    from sqlalchemy import create_engine
     engine = create_engine(engine_str)
     Session = sessionmaker(bind=engine)
     session = Session()
     try:
         yield session
         session.commit()
-    except:
+    except Exception:
         session.rollback()
         raise
     finally:
         session.close()
+

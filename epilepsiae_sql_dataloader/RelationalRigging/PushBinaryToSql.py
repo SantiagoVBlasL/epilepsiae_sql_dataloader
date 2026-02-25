@@ -28,6 +28,7 @@ from datetime import timedelta
 from typing import List
 
 import os
+import re
 import click
 
 
@@ -76,13 +77,22 @@ class BinaryToSql:
             results = [dict_with_attrs(object_as_dict(sample)) for sample in results]
         return results
 
-    def load_binary(self, fp, num_channels, dtype=np.uint16):
+    def load_binary(self, fp, num_channels, sample_freq=None, max_seconds=None, dtype=np.uint16):
         """
         Loads the binary data from the given file pointer.
         It is assumed that the binary data is stored as a 2D array of uint values of size -1, num_channels
         """
         print(f"Loading binary data from {fp}")
-        binary = np.fromfile(fp, dtype=dtype)
+        count = -1
+        if max_seconds is not None and max_seconds > 0:
+            if sample_freq is None:
+                raise ValueError("sample_freq is required when max_seconds is set")
+            count = int(max_seconds * sample_freq * num_channels)  # elements, not bytes
+
+        binary = np.fromfile(fp, dtype=dtype, count=count)
+        # trim to multiple of num_channels to avoid reshape errors
+        n = (binary.size // num_channels) * num_channels
+        binary = binary[:n]
         binary = binary.reshape(-1, num_channels)
 
         return binary
@@ -91,8 +101,8 @@ class BinaryToSql:
         """
         Downsamples and normalizes the given binary data.
         """
-        # Downsample the data and cast it to float64 values.
-        float_binary = binary.astype(np.float64)
+        # Keep memory low: float32 is enough here
+        float_binary = binary.astype(np.float32)
         decimate_factor = sample_freq // new_sample_freq
         x = decimate(float_binary, decimate_factor, axis=0)
         x = normalize(x, norm="l2", axis=1, copy=True, return_norm=False)
@@ -143,14 +153,11 @@ class BinaryToSql:
                 i * sample_length * freq : (i + 1) * sample_length * freq, :
             ]
 
-            # Convert the entire chunk data to bytes
-            chunk_data_bytes = chunk_data.astype(np.float64).tobytes()
 
             # Separate the chunk into its component channels
             for j in range(num_channels):
-                channel_data_bytes = chunk_data_bytes[
-                    j * sample_length * freq * 2 : (j + 1) * sample_length * freq * 2
-                ]
+                # Correct + smaller: store float32 per channel
+                channel_data_bytes = chunk_data[:, j].astype(np.float32).tobytes()
 
                 # Create a DataChunk mapping (without instantiating an object)
                 chunk_mapping = {
@@ -237,7 +244,7 @@ class BinaryToSql:
                 seizure_state = 2  # The chunk is during the pre-seizure period
         return seizure_state
 
-    def load_patient(self, pat_id: int):
+    def load_patient(self, pat_id: int, *, max_samples=None, max_seconds=None):
         """
         Gets the seizures and samples for the given patient.
         Loads the first two seizures and the first sample.
@@ -251,6 +258,8 @@ class BinaryToSql:
         bad_binaries = 0
 
         for i, sample in enumerate(samples):
+            if max_samples is not None and i >= max_samples:
+                break
             if bad_binaries > 5:
                 raise ValueError("Too many bad binaries")
             with session_scope(self.engine_str) as session:
@@ -258,7 +267,9 @@ class BinaryToSql:
                 print(f"Handling sample: {i} of {len(samples)}")
                 try:
                     binary_data = self.load_binary(
-                        sample.data_file, sample.num_channels
+                        sample.data_file, sample.num_channels,
+                        sample_freq=sample.sample_freq,
+                        max_seconds=max_seconds
                     )
                 except Exception as e:
                     print(f"Error loading binary data for sample: {sample}")
@@ -296,14 +307,19 @@ class BinaryToSql:
         print("Bad Binaries: ", bad_binaries)
 
 
-DEFAULT_DIR = "/mnt/external1/raw/inv"
-
+#DEFAULT_DIR = "/media/diego/My_Book_Diego/EU_epilepsy_database/inv"
+DATA_ROOT = os.environ.get("DATA_ROOT")
+DEFAULT_DIR = os.path.join(DATA_ROOT, "inv") if DATA_ROOT else "./inv"
 
 @click.command()
 @click.option(
     "--dir", default=DEFAULT_DIR, help="Directory containing the patient folders"
 )
-def main(dir):
+@click.option("--max-seconds", type=int, default=10, show_default=True,
+              help="DEBUG: only read first N seconds per sample (use 0 for full file)")
+@click.option("--max-samples", type=int, default=1, show_default=True,
+              help="DEBUG: only process first N samples per patient (use 0 for all)")
+def main(dir, max_seconds, max_samples):
     """
     Loops through all the pat directories in the given directory, extracts the patient ID, and processes the data using the BinaryToSQL class.
     """
@@ -320,12 +336,21 @@ def main(dir):
     for i, item in enumerate(pat_dirs):
         if os.path.isdir(os.path.join(dir, item)) and item.startswith("pat_"):
             # Extract the patient ID
-            pat_id = int(item.split("_")[1])
+            #pat_id = int(item.split("_")[1])
+            m = re.search(r"(\d+)$", item)
+            if not m:
+                click.echo(f"Skipping directory with unexpected name: {item}")
+                continue
+            pat_id = int(m.group(1))
+            
             click.echo(f"Processing patient ID: {pat_id}")
             click.echo(f"On patient {i} of {len(pat_dirs)}")
 
             # Load patient data using the BinaryToSQL class
-            binary_to_sql.load_patient(pat_id)
+            ms = None if (max_samples is not None and max_samples <= 0) else max_samples
+            msec = None if (max_seconds is not None and max_seconds <= 0) else max_seconds
+            binary_to_sql.load_patient(pat_id, max_samples=ms, max_seconds=msec)
+            #binary_to_sql.load_patient(pat_id)
 
     click.echo("All patients processed successfully.")
 

@@ -21,6 +21,7 @@ from epilepsiae_sql_dataloader.models.Base import Base
 
 import sys
 import click
+import re
 
 
 class MetaDataBuilder(object):
@@ -58,7 +59,7 @@ class MetaDataBuilder(object):
                         offset1,
                         onset_sample,
                         offset_sample,
-                    ) = line.split(" ")
+                    ) = re.split(r"\s+", line) #line.split(" ")
                 except ValueError:
                     print(f"Error parsing line: {line}")
                     continue
@@ -252,7 +253,9 @@ class MetaDataBuilder(object):
         directory_path = Path(directory)
         pat_id = directory.split("/")[-1]
         data = self.read_seizure_data(directory_path / "seizure_list")
-        patient_id_int = int(pat_id.split("_")[1])
+        m = re.search(r"(\d+)$", pat_id)
+        patient_id_int = int(m.group(1))
+        #patient_id_int = int(pat_id.split("_")[1])
         self.create_patient(patient_id_int, dataset_id)
         # print("Found seizure data: ", data)
         self.load_seizure_data_to_db(data, patient_id_int)
@@ -346,7 +349,7 @@ def main(directory, engine_str, drop_tables, patient_id, seizure_file):
             return 0
 
     loader = MetaDataBuilder(engine_str)
-    loader.start(directory)
+    loader.start([directory])
 
     return 0
 

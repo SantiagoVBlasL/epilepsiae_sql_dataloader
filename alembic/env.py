@@ -57,6 +57,14 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    import os
+    from epilepsiae_sql_dataloader.utils import _normalize_pgurl  # o copiá helper
+
+    pgurl = os.environ.get("PGURL") or os.environ.get("DATABASE_URL")
+    if pgurl:
+        config.set_main_option("sqlalchemy.url", _normalize_pgurl(pgurl))
+
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
