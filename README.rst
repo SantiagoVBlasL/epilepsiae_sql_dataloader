@@ -30,6 +30,19 @@ This leverages the https://epilepsiae.uniklinik-freiburg.de/ epilepsy dataset to
 SETUP
 -----
 
+Developer Quickstart
+--------------------
+
+For reboot-proof local setup and fast sanity checks:
+
+* ``bash tools/dev/up.sh`` to start/create the local PostgreSQL container and run sanity queries.
+* ``source tools/dev/env.sh`` to export canonical ``PGURL``, ``DATA_ROOT``, and ``PYTHONNOUSERSITE``.
+* ``bash tools/dev/status.sh`` to print container/DB health, class distribution, and top patients.
+* ``bash tools/dev/down.sh`` to stop the container (use ``--purge --yes`` to remove container + volume).
+* ``notebooks/00_environment_sanity.ipynb`` for notebook-based environment/database checks.
+* ``epilepsiae_sql_dataloader/RUNBOOK.md`` for the end-to-end ML pipeline:
+  targets -> targeted ingestion -> balanced parquet export -> validation.
+
 The majority of the time you are going to want to use the DataLoaders in DataDinghy for your machine learning model. However, before you can do that. You'll have to do a fairly large amount of set up.
 
 1. Download the raw data from https://epilepsiae.uniklinik-freiburg.de/ and place it in a directory.
