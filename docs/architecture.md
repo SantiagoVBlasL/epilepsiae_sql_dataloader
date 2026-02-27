@@ -26,7 +26,7 @@ pick targets (SQL on samples+seizures)
   -> targeted ingestion (PushBinaryToSql --sample-ids --start-seconds)
   -> chunk table (data_chunks, partitioned, seizure_state labels)
   -> export preictal only   (state=2, near-seizure=preictal)
-  -> export interictal only (state=0, near-seizure=none)
+  -> export interictal only (state=0, near-seizure=none, exclude-near-seizure-seconds=K)
   -> merge + deterministic class balance
   -> final parquet dataset (TCH or CTH_flat)
   -> validation (class counts + row/sample checks)
@@ -160,11 +160,11 @@ Pre-ictal vs inter-ictal semantics:
   - `0` = inter-ictal
   - `1` = ictal
   - `2` = pre-ictal
-- `near_seizure` is an additional timestamp gate on top of label filtering:
+- `near_seizure` is an inclusion gate on top of label filtering:
   - `none`: no extra gate.
   - `preictal`: keep windows/chunks where `chunk_start_ts in [onset-3600s, onset)`.
   - `ictal`: keep windows/chunks that overlap `[onset, offset]`.
-- `exclude_near_seizure_seconds` is a separate exclusion gate:
+- `exclude_near_seizure_seconds` is a separate exclusion gate (anti-join / `NOT EXISTS`):
   - if `K>0`, any chunk too close to any seizure is excluded before window construction.
   - recommended for interictal export: `states=0`, `near_seizure=none`, `exclude_near_seizure_seconds=3600`.
 

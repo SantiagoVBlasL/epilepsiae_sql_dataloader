@@ -5,6 +5,52 @@ Objetivo: ingestar el dataset Epilepsiae (carpeta `inv/`) a PostgreSQL.
 1. Metadata -> tablas: `datasets`, `patients`, `samples`, `seizures`
 2. Binarios -> tabla: `data_chunks` (BYTEA con float32[256] = 1 segundo @ 256 Hz por canal)
 
+## Monday Restart (5 minutes)
+
+Single source of truth for Monday startup:
+
+```bash
+conda activate ieeg-epilepsiae
+source tools/dev/env.sh
+bash tools/dev/up.sh
+bash tools/dev/status.sh
+```
+
+Optional notebooks:
+
+```bash
+conda install -y notebook ipykernel
+# or: conda install -y jupyterlab ipykernel
+python -m ipykernel install --user --name ieeg-epilepsiae --display-name "Python (ieeg-epilepsiae)"
+jupyter notebook notebooks/00_environment_sanity.ipynb
+```
+
+Run Pipeline B once:
+
+```bash
+bash tools/ml/run_pipeline_b_patient.sh 548 60 10 CTH_flat 20 20 42 3600
+```
+
+Run tests:
+
+```bash
+python -m pytest -q tests/test_export_chunks_to_parquet.py
+```
+
+Expected outputs:
+- exporter prints `Exported N windows` and class counts for `0` / `2`
+- merger prints balanced class counts and `X[0] shape`
+- tests print `8 passed, 1 skipped`
+
+Current verified status (verbatim baseline on this branch):
+- Smoke exporter ok:
+  `python -m epilepsiae_sql_dataloader.DataDinghy.ExportChunksToParquet --patients 548 --states 0 --near-seizure none --exclude-near-seizure-seconds 3600 --data-types 0 --window-seconds 60 --stride-seconds 10 --layout CTH_flat --out ./exports/_smoke_interictal_excl3600.parquet --max-windows-per-patient 5 --verbose`
+  => `Exported 5 windows` (class `0`).
+- Unit tests ok:
+  `python -m pytest -q tests/test_export_chunks_to_parquet.py` => `8 passed, 1 skipped`
+- Repo clean baseline:
+  `git status --short` => empty
+
 ## 0) Entorno canonico
 
 - Conda env: `ieeg-epilepsiae`
@@ -23,8 +69,8 @@ export DATA_ROOT="/media/diego/My_Book_Diego/EU_epilepsy_database"
 ### 0.1 Reboot-proof bootstrap (Docker + env + sanity)
 
 ```bash
-bash tools/dev/up.sh
 source tools/dev/env.sh
+bash tools/dev/up.sh
 bash tools/dev/status.sh
 ```
 
@@ -50,6 +96,14 @@ Luego:
 
 ```bash
 jupyter notebook notebooks/00_environment_sanity.ipynb
+```
+
+### 0.3 Dev dependencies
+
+```bash
+conda activate ieeg-epilepsiae
+conda install -y pytest
+python -m pytest -q tests/test_export_chunks_to_parquet.py
 ```
 
 Para apagar DB local sin borrar datos:
@@ -267,7 +321,7 @@ Pipeline B (ML-correct) in this repo:
 1. pick targets (SQL)
 2. targeted ingestion if needed (`PushBinaryToSql --sample-ids --start-seconds`)
 3. export PREICTAL windows only (`state=2`, `near-seizure=preictal`)
-4. export INTERICTAL windows only (`state=0`, `near-seizure=none`)
+4. export INTERICTAL windows only (`state=0`, `near-seizure=none`, `exclude-near-seizure-seconds=3600` recommended)
 5. merge + balance deterministically
 6. final validation (counts + `X` shape)
 
@@ -334,16 +388,7 @@ group by 1,2,3
 order by seizure_state;"
 ```
 
-### 4.3 DO NOT: single-shot preictal gate with mixed states
-
-No usar este patron para dataset binario:
-
-`--states 0,2 --near-seizure preictal`
-
-Motivo: `near-seizure=preictal` restringe a `[onset-3600s, onset)`, donde normalmente no hay clase `0`.
-Ejemplo observado: para `patient_id=548`, en esa ventana hay clases `1/2` pero no `0`, y el export balanceado termina en 0 ventanas utilizables.
-
-### 4.4 Export PREICTAL only
+### 4.3 Export PREICTAL only
 
 ```bash
 PAT_ID=548
@@ -353,7 +398,7 @@ bash tools/ml/export_preictal_only.sh \
   60 10 CTH_flat 200
 ```
 
-### 4.5 Export INTERICTAL only
+### 4.4 Export INTERICTAL only
 
 ```bash
 PAT_ID=548
@@ -381,7 +426,7 @@ python -m epilepsiae_sql_dataloader.DataDinghy.ExportChunksToParquet \
   --verbose
 ```
 
-### 4.6 Merge + balance deterministically
+### 4.5 Merge + balance deterministically
 
 ```bash
 python tools/ml/merge_balance_parquets.py \
@@ -392,7 +437,7 @@ python tools/ml/merge_balance_parquets.py \
   --strategy downsample
 ```
 
-### 4.7 One-command Pipeline B for one patient
+### 4.6 One-command Pipeline B for one patient
 
 ```bash
 bash tools/ml/run_pipeline_b_patient.sh 548 60 10 CTH_flat 200 200 42 3600
@@ -403,7 +448,7 @@ Outputs:
 - `exports/pat_<PAT_ID>_interictal_only_w<WINDOW>_s<STRIDE>_<LAYOUT>.parquet`
 - `exports/pat_<PAT_ID>_balanced_w<WINDOW>_s<STRIDE>_<LAYOUT>.parquet`
 
-### 4.8 Final validation
+### 4.7 Final validation
 
 ```bash
 python - <<'PY'
@@ -417,3 +462,8 @@ print("rows:", len(df))
 print("X[0] shape:", np.asarray(df.iloc[0]["X"]).shape)
 PY
 ```
+
+## 5) Common pitfalls
+
+- Do not use `--states 0,2 --near-seizure preictal` for binary datasets. Preictal inclusion gate usually removes class `0`; for `patient_id=548` this yields 0 usable mixed-class windows.
+- CLI typo reminder: use `--max-windows-per-patient` (not `--max-windows-per-patent`).

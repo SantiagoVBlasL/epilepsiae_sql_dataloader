@@ -42,6 +42,7 @@ For reboot-proof local setup and fast sanity checks:
 * ``notebooks/00_environment_sanity.ipynb`` for notebook-based environment/database checks.
 * ``epilepsiae_sql_dataloader/RUNBOOK.md`` for the end-to-end ML pipeline:
   targets -> targeted ingestion -> balanced parquet export -> validation.
+* ``epilepsiae_sql_dataloader/RUNBOOK.md#Monday-Restart-(5-minutes)`` for the copy/paste Monday checklist.
 
 The majority of the time you are going to want to use the DataLoaders in DataDinghy for your machine learning model. However, before you can do that. You'll have to do a fairly large amount of set up.
 
