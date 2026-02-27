@@ -91,6 +91,13 @@ class DataChunk(Base):
     seizure_state = Column(Integer)
     data_type = Column(SmallInteger)
     data = Column(BYTEA)
+    # ... columnas existentes ...
+    sample_id = Column(Integer, nullable=True)
+    chunk_idx = Column(Integer, nullable=True)
+    channel_idx = Column(SmallInteger, nullable=True)
+    electrode_name = Column(String(64), nullable=True)
+    chunk_start_ts = Column(DateTime, nullable=True)
+    fs_hz = Column(SmallInteger, nullable=False, server_default=text("256"))
 
     patient = relationship(Patient, back_populates="chunks")
     idx_patient_seizure_data_type = Index(
