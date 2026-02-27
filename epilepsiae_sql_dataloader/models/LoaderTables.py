@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import BYTEA
 from epilepsiae_sql_dataloader.models.Seizures import Seizure
 from epilepsiae_sql_dataloader.models.Base import Base
 import sqlalchemy
+from sqlalchemy import Column, Integer, SmallInteger, String, DateTime, text
 
 
 class Dataset(Base):
