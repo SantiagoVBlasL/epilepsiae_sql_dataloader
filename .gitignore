@@ -126,3 +126,13 @@ __pycache__/
 # local artifacts
 *.save
 *.log
+
+# Local runtime artifacts
+exports/
+.env
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Notebook exports
+notebooks/*.html

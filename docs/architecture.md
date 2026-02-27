@@ -24,9 +24,11 @@ The binary stage is executed by:
 ```
 pick targets (SQL on samples+seizures)
   -> targeted ingestion (PushBinaryToSql --sample-ids --start-seconds)
-  -> chunk table (data_chunks, partitioned)
-  -> window export (ExportChunksToParquet --states 0,2 --near-seizure preictal)
-  -> parquet dataset (TCH or CTH_flat)
+  -> chunk table (data_chunks, partitioned, seizure_state labels)
+  -> export preictal only   (state=2, near-seizure=preictal)
+  -> export interictal only (state=0, near-seizure=none)
+  -> merge + deterministic class balance
+  -> final parquet dataset (TCH or CTH_flat)
   -> validation (class counts + row/sample checks)
 ```
 
@@ -123,6 +125,9 @@ Filtering knobs:
   - `none`: no extra filter.
   - `preictal`: include chunks where `chunk_start_ts in [onset-3600s, onset)`.
   - `ictal`: include chunks that overlap `[onset, offset]`.
+- `exclude_near_seizure_seconds` (K): exclusion gate using anti-join (`NOT EXISTS`):
+  - when `K=0`, disabled (backward compatible).
+  - when `K>0`, drop chunks where `chunk_start_ts in [onset-K, COALESCE(offset,onset)+K]`.
 
 Window construction:
 - Input order is deterministic:
@@ -150,17 +155,23 @@ Output schema (Parquet):
   - `CTH_flat`: `[n_channels][window_seconds * fs_hz]`
 - `electrode_names` (`list[str|None]`) ordered to match channel axis in `X`
 
-Pre-ictal vs inter-ictal setup:
-- Use `states=0,2` to build binary-ready windows.
-- `seizure_state=0` -> inter-ictal.
-- `seizure_state=2` -> pre-ictal.
-- `seizure_state=1` -> ictal (usually excluded in binary pre-ictal vs inter-ictal experiments).
-- For balanced exports with deterministic dataset size, use:
-  - `--min-windows-per-patient N`
-  - `--max-windows-per-patient N`
-- Optional helper `split_by_patient_id(...)` enforces patient-level splits to avoid leakage between train/validation.
+Pre-ictal vs inter-ictal semantics:
+- `seizure_state` is the class label:
+  - `0` = inter-ictal
+  - `1` = ictal
+  - `2` = pre-ictal
+- `near_seizure` is an additional timestamp gate on top of label filtering:
+  - `none`: no extra gate.
+  - `preictal`: keep windows/chunks where `chunk_start_ts in [onset-3600s, onset)`.
+  - `ictal`: keep windows/chunks that overlap `[onset, offset]`.
+- `exclude_near_seizure_seconds` is a separate exclusion gate:
+  - if `K>0`, any chunk too close to any seizure is excluded before window construction.
+  - recommended for interictal export: `states=0`, `near_seizure=none`, `exclude_near_seizure_seconds=3600`.
 
-Near-seizure filter behavior (`--near-seizure`) is an additional timestamp gate on top of `states`:
-- `none`: no extra gate.
-- `preictal`: keep windows/chunks where `chunk_start_ts in [onset-3600s, onset)`.
-- `ictal`: keep windows/chunks that overlap `[onset, offset]`.
+Pipeline B implication:
+- A preictal-gated export (`near-seizure=preictal`) should not be expected to contain inter-ictal class `0`.
+- For ML-correct binary datasets (`0` vs `2`), export classes separately and balance after export:
+  1. preictal-only export (`states=2`, `near-seizure=preictal`)
+  2. interictal-only export (`states=0`, `near-seizure=none`)
+  3. deterministic merge/balance
+- Optional helper `split_by_patient_id(...)` enforces patient-level splits to avoid leakage between train/validation.

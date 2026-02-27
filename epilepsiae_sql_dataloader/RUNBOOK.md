@@ -28,7 +28,25 @@ source tools/dev/env.sh
 bash tools/dev/status.sh
 ```
 
-Notebook de chequeo rapido:
+### 0.2 Enable notebooks
+
+Si `jupyter notebook` falla por modulo faltante, instala una de estas opciones en el env `ieeg-epilepsiae`:
+
+```bash
+conda activate ieeg-epilepsiae
+conda install -y notebook ipykernel
+python -m ipykernel install --user --name ieeg-epilepsiae --display-name "Python (ieeg-epilepsiae)"
+```
+
+o:
+
+```bash
+conda activate ieeg-epilepsiae
+conda install -y jupyterlab ipykernel
+python -m ipykernel install --user --name ieeg-epilepsiae --display-name "Python (ieeg-epilepsiae)"
+```
+
+Luego:
 
 ```bash
 jupyter notebook notebooks/00_environment_sanity.ipynb
@@ -243,75 +261,17 @@ order by n desc
 limit 20;'
 ```
 
-## 4) Export ML windows to Parquet
+## 4) Canonical ML pipeline (Pipeline B)
 
-Export debug subset (pre-ictal vs inter-ictal, iEEG only):
+Pipeline B (ML-correct) in this repo:
+1. pick targets (SQL)
+2. targeted ingestion if needed (`PushBinaryToSql --sample-ids --start-seconds`)
+3. export PREICTAL windows only (`state=2`, `near-seizure=preictal`)
+4. export INTERICTAL windows only (`state=0`, `near-seizure=none`)
+5. merge + balance deterministically
+6. final validation (counts + `X` shape)
 
-```bash
-python -m epilepsiae_sql_dataloader.DataDinghy.ExportChunksToParquet \
-  --pgurl "$PGURL" \
-  --out ./exports/preictal_vs_interictal_debug.parquet \
-  --patients all \
-  --states 0,2 \
-  --data-types 0 \
-  --window-seconds 60 \
-  --stride-seconds 10 \
-  --max-rows 10000 \
-  --verbose
-```
-
-Balanced pre-ictal vs inter-ictal export (deterministic per patient):
-
-```bash
-python -m epilepsiae_sql_dataloader.DataDinghy.ExportChunksToParquet \
-  --pgurl "$PGURL" \
-  --out ./exports/preictal_vs_interictal_balanced.parquet \
-  --patients all \
-  --states 0,2 \
-  --data-types 0 \
-  --near-seizure preictal \
-  --window-seconds 5 \
-  --stride-seconds 2 \
-  --min-windows-per-patient 1 \
-  --max-windows-per-patient 20 \
-  --layout CTH_flat \
-  --max-rows 10000 \
-  --verbose
-```
-
-Expected console output:
-- total exported window count
-- class counts per `seizure_state` (for example: `class 0: ...`, `class 2: ...`)
-- when `--near-seizure` is used, rows are time-filtered by `seizures.onset/offset`
-
-Output schema (`Parquet`):
-- `patient_id`
-- `sample_id`
-- `window_start_chunk_idx`
-- `window_start_ts`
-- `seizure_state` (target)
-- `X` layout is configurable:
-  - `TCH`: `[window_seconds][n_channels][fs_hz]`
-  - `CTH_flat`: `[n_channels][window_seconds*fs_hz]`
-- `electrode_names` aligned with channel dimension of `X`
-
-Label meaning for binary pre-ictal vs inter-ictal:
-- `0` = inter-ictal
-- `2` = pre-ictal
-
-Notes:
-- Windows with mixed seizure states are dropped to keep one unambiguous target per window.
-- Windows with chunk-index gaps are dropped.
-- `--near-seizure preictal`: keeps chunks with `chunk_start_ts in [onset-3600s, onset)`.
-- `--near-seizure ictal`: keeps chunks overlapping `[onset, offset]`.
-- `--min-windows-per-patient` and `--max-windows-per-patient` apply deterministic per-patient controls; with multiple states they are balanced per class.
-- For train/val/test, split by `patient_id` to avoid leakage across recordings from the same patient.
-
-## 5) End-to-end pipeline (targets -> ingest -> export -> validate)
-
-### 5.1 Pick targets (SQL candidate query)
-
-Use this query to list candidate `(pat_id, sample_id)` windows that overlap a seizure pre-ictal range:
+### 4.1 Pick targets (SQL)
 
 ```bash
 psql "$PGURL" -c "
@@ -341,17 +301,11 @@ order by preictal_overlap_s desc, pat_id, sample_id
 limit 100;"
 ```
 
-Rule of thumb:
-- Require `preictal_overlap_s >= window_seconds + margin`.
-- For `window_seconds=60` and `margin=120`, use `>= 180`.
+Regla: `preictal_overlap_s >= window_seconds + margin`.
 
-### 5.2 Targeted ingestion (sample_id + start_seconds)
+### 4.2 Targeted ingestion (if needed)
 
-Compute:
-
-`start_seconds = max(0, onset_sec_into_sample - 3600 - margin)` with `margin=120`.
-
-Ingest only one chosen sample:
+`start_seconds = max(0, onset_sec_into_sample - 3600 - margin)` con `margin=120`.
 
 ```bash
 PAT_ID=253
@@ -368,7 +322,7 @@ python -m epilepsiae_sql_dataloader.RelationalRigging.PushBinaryToSql \
   --verbose
 ```
 
-Validate class-2 rows exist after ingestion:
+Validar filas clase 2:
 
 ```bash
 psql "$PGURL" -c "
@@ -380,39 +334,83 @@ group by 1,2,3
 order by seizure_state;"
 ```
 
-### 5.3 Export balanced Parquet (pre-ictal vs inter-ictal)
+### 4.3 DO NOT: single-shot preictal gate with mixed states
+
+No usar este patron para dataset binario:
+
+`--states 0,2 --near-seizure preictal`
+
+Motivo: `near-seizure=preictal` restringe a `[onset-3600s, onset)`, donde normalmente no hay clase `0`.
+Ejemplo observado: para `patient_id=548`, en esa ventana hay clases `1/2` pero no `0`, y el export balanceado termina en 0 ventanas utilizables.
+
+### 4.4 Export PREICTAL only
 
 ```bash
-PAT_ID=253
-OUT=./exports/pat_${PAT_ID}_preictal_vs_interictal_w60_s10.parquet
+PAT_ID=548
+bash tools/ml/export_preictal_only.sh \
+  "$PAT_ID" \
+  "./exports/pat_${PAT_ID}_preictal_only_w60_s10_CTH_flat.parquet" \
+  60 10 CTH_flat 200
+```
 
+### 4.5 Export INTERICTAL only
+
+```bash
+PAT_ID=548
+bash tools/ml/export_interictal_only.sh \
+  "$PAT_ID" \
+  "./exports/pat_${PAT_ID}_interictal_only_w60_s10_CTH_flat.parquet" \
+  60 10 CTH_flat 200 3600
+```
+
+Equivalente directo con el exporter:
+
+```bash
 python -m epilepsiae_sql_dataloader.DataDinghy.ExportChunksToParquet \
   --pgurl "$PGURL" \
-  --out "$OUT" \
+  --out "./exports/pat_${PAT_ID}_interictal_only_w60_s10_CTH_flat.parquet" \
   --patients "$PAT_ID" \
-  --states 0,2 \
+  --states 0 \
   --data-types 0 \
-  --near-seizure preictal \
+  --near-seizure none \
+  --exclude-near-seizure-seconds 3600 \
   --window-seconds 60 \
   --stride-seconds 10 \
   --layout CTH_flat \
-  --min-windows-per-patient 1 \
-  --max-windows-per-patient 50 \
+  --max-windows-per-patient 200 \
   --verbose
 ```
 
-### 5.4 Validate export
+### 4.6 Merge + balance deterministically
 
-Exporter already prints class counts per `seizure_state`.
+```bash
+python tools/ml/merge_balance_parquets.py \
+  --preictal "./exports/pat_548_preictal_only_w60_s10_CTH_flat.parquet" \
+  --interictal "./exports/pat_548_interictal_only_w60_s10_CTH_flat.parquet" \
+  --out "./exports/pat_548_balanced_w60_s10_CTH_flat.parquet" \
+  --seed 42 \
+  --strategy downsample
+```
 
-Quick Parquet check:
+### 4.7 One-command Pipeline B for one patient
+
+```bash
+bash tools/ml/run_pipeline_b_patient.sh 548 60 10 CTH_flat 200 200 42 3600
+```
+
+Outputs:
+- `exports/pat_<PAT_ID>_preictal_only_w<WINDOW>_s<STRIDE>_<LAYOUT>.parquet`
+- `exports/pat_<PAT_ID>_interictal_only_w<WINDOW>_s<STRIDE>_<LAYOUT>.parquet`
+- `exports/pat_<PAT_ID>_balanced_w<WINDOW>_s<STRIDE>_<LAYOUT>.parquet`
+
+### 4.8 Final validation
 
 ```bash
 python - <<'PY'
 import numpy as np
 import pandas as pd
 
-out = "./exports/pat_253_preictal_vs_interictal_w60_s10.parquet"
+out = "./exports/pat_548_balanced_w60_s10_CTH_flat.parquet"
 df = pd.read_parquet(out)
 print(df["seizure_state"].value_counts().sort_index())
 print("rows:", len(df))
